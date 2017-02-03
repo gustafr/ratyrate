@@ -20,16 +20,22 @@ module Ratyrate
     end
   end
 
+  def clear_rating (user, dimension=nil)
+    user_rating = user.ratings_given.where(dimension: dimension, rateable_id: id, rateable_type: self.class.name)
+    Rate.delete(user_rating.first.id) unless user_rating.nil?
+    update_rate_average(0, dimension)
+  end
+
   def update_rate_average_dirichlet(stars, dimension=nil)
     # assumes 5 possible vote categories
     dp = {1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1}
-    stars_group = Hash[rates(dimension).group(:stars).count.map{|k,v| [k.to_i,v] }]
-    posterior = dp.merge(stars_group){|key, a, b| a + b}
-    sum = posterior.map{ |i, v| v }.inject { |a, b| a + b }
-    davg = posterior.map{ |i, v| i * v }.inject { |a, b| a + b }.to_f / sum
+    stars_group = Hash[rates(dimension).group(:stars).count.map { |k, v| [k.to_i, v] }]
+    posterior = dp.merge(stars_group) { |key, a, b| a + b }
+    sum = posterior.map { |i, v| v }.inject { |a, b| a + b }
+    davg = posterior.map { |i, v| i * v }.inject { |a, b| a + b }.to_f / sum
 
     if average(dimension).nil?
-      send("create_#{average_assoc_name(dimension)}!", { avg: davg, qty: 1, dimension: dimension })
+      send("create_#{average_assoc_name(dimension)}!", {avg: davg, qty: 1, dimension: dimension})
     else
       a = average(dimension)
       a.qty = rates(dimension).count
@@ -40,12 +46,18 @@ module Ratyrate
 
   def update_rate_average(stars, dimension=nil)
     if average(dimension).nil?
-      send("create_#{average_assoc_name(dimension)}!", { avg: stars, qty: 1, dimension: dimension })
+      send("create_#{average_assoc_name(dimension)}!", {avg: stars, qty: 1, dimension: dimension})
     else
       a = average(dimension)
       a.qty = rates(dimension).count
-      a.avg = rates(dimension).average(:stars)
-      a.save!(validate: false)
+      #If there is no rating for the model then delete the row from average rating. You might want to
+      # update overall average also if using multiple dimension
+      if a.qty == 0
+        a.delete
+      else
+        a.avg = rates(dimension).average(:stars)
+        a.save!(validate: false)
+      end
     end
   end
 
@@ -119,24 +131,24 @@ module Ratyrate
     end
 
     def ratyrate_rateable(*dimensions)
-      has_many :rates_without_dimension, -> { where dimension: nil}, as: :rateable, class_name: 'Rate', dependent: :destroy
+      has_many :rates_without_dimension, -> { where dimension: nil }, as: :rateable, class_name: 'Rate', dependent: :destroy
       has_many :raters_without_dimension, through: :rates_without_dimension, source: :rater
 
-      has_one :rate_average_without_dimension, -> { where dimension: nil}, as: :cacheable,
+      has_one :rate_average_without_dimension, -> { where dimension: nil }, as: :cacheable,
               class_name: 'RatingCache', dependent: :destroy
 
       dimensions.each do |dimension|
-        has_many "#{dimension}_rates".to_sym, -> {where dimension: dimension.to_s},
-                                              dependent: :destroy,
-                                              class_name: 'Rate',
-                                              as: :rateable
+        has_many "#{dimension}_rates".to_sym, -> { where dimension: dimension.to_s },
+                 dependent: :destroy,
+                 class_name: 'Rate',
+                 as: :rateable
 
         has_many "#{dimension}_raters".to_sym, through: :"#{dimension}_rates", source: :rater
 
         has_one "#{dimension}_average".to_sym, -> { where dimension: dimension.to_s },
-                                              as: :cacheable, 
-                                              class_name: 'RatingCache',
-                                              dependent: :destroy
+                as: :cacheable,
+                class_name: 'RatingCache',
+                dependent: :destroy
       end
     end
   end
